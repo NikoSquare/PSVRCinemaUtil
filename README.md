@@ -1,4 +1,14 @@
 # PSVRCinemaUtil
 Command line tool enables Cinema Mode for PSVR USB connected to macOS
-Mouse Cursor can be controlled by head movement.
-Download: https://drive.google.com/file/d/15F7Q5mfMCqVYN7WKUnbVefhHbHf0t5Wb/view?usp=sharing
+
+Mouse Cursor is controlled by head movement.
+
+Controls:
+
+Volume +: Mouse Click
+
+Volume -: Mouse Cursor Enabler while pushed
+
+Mute: Re-center view and cursor
+
+Download: https://drive.google.com/file/d/1DtfjUdMomsghCFve8V6KWjxrGzZhpdXG/view?usp=sharing
