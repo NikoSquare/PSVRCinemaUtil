@@ -14,15 +14,10 @@ let fileManager = FileManager.init()
 var bufferSet: Bool = false
 let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: 3)
 
-let managerIOHID: IOHIDManager = IOHIDManagerCreate(kCFAllocatorDefault, 0)
-let matchingDictionary: CFDictionary = NSDictionary(dictionary: [kIOHIDVendorIDKey:0x054C,kIOHIDProductIDKey:0x09AF/*,kIOHIDPrimaryUsagePageKey:0xFF00*/]) as CFDictionary
 
-
-IOHIDManagerSetDeviceMatching(managerIOHID, matchingDictionary)
-IOHIDManagerOpen(managerIOHID, 0)
-
-var device: IOHIDDevice?
-if let devicesSet: CFSet = IOHIDManagerCopyDevices(managerIOHID) {
+/*
+ // Optional routine to filter out device
+if let devicesSet: CFSet = IOHIDManagerCopyDevices(managerIOHIDSender) {
     for deviceItem in (devicesSet as NSSet) {
         
         
@@ -37,6 +32,7 @@ if let devicesSet: CFSet = IOHIDManagerCopyDevices(managerIOHID) {
                 let resultPointer = UnsafeMutablePointer<UInt32>.allocate(capacity: 1)
                 if CFNumberGetValue((result as! CFNumber), CFNumberType.sInt32Type, UnsafeMutableRawPointer(resultPointer)) {
                     device = (deviceItem as! IOHIDDevice)
+                    print(resultPointer[0])
                     if resultPointer[0] == 65280 {
                         // THIS IS DEVICE
                         device = (deviceItem as! IOHIDDevice)
@@ -48,16 +44,11 @@ if let devicesSet: CFSet = IOHIDManagerCopyDevices(managerIOHID) {
         
     }
 }
-
-if device == nil {
-    FileHandle.standardError.write("Copyright (C) 2018 Nikita Mordasov. All rights reserved.\n\nThis is psvrCinemaUtil\nActivates CinemaMode on PSVR Rev1 connected by USB to this machine, no console needed (HDMI sound may not work).\n\nERROR: PSVR IS NOT DETECTED! (Connect PSVR processing unit USB cable to this machine)\n\n".data(using: String.Encoding.ascii)!)
-    exit(1)
-}
+*/
 
 
 
-
-// Settings reding
+// Settings reading
 if let file = FileHandle.init(forReadingAtPath: "psvrCinemaUtil.dat") {
     // Try to read
     let data = file.readData(ofLength: 3)
@@ -114,115 +105,164 @@ var dataMessage: [UInt8] = [33, // REPORT ID 0x21 = 33
     0,0,0,0
 ]
 
-var resetMarket: UInt8 = 0
+// WELCOME MESSAGE
+FileHandle.standardError.write("\nCopyright (C) 2018 Nikita Mordasov. All rights reserved.\n\npsvrCinemaUtil is running:\nCursor can be moved within screen by head movement.\nVR Control Buttons Remapped:\nMute: re-centers view and cursor\nVolume Down: Hold to Enable Cursor Movement\nVolume Up: Click at the Cursor (Single Click Only)\nTo update settings, find and delete psvrCinemaUtil.dat\nCtrl+C to exit (VR will continue to work).\n".data(using: String.Encoding.ascii)!)
 
-// Send Initial report
-IOHIDDeviceSetReport(device!, kIOHIDReportTypeOutput, 0x21, dataMessage, 64)
 
-// Short pointer
-var short = UnsafeMutablePointer<Int16>.allocate(capacity: 1)
-var shortOption: UnsafeMutablePointer<UInt8> = UnsafeMutableRawPointer(short).assumingMemoryBound(to: UInt8.self)
+// USB MANAGEMENT
+//let managerIOHID: IOHIDManager = IOHIDManagerCreate(kCFAllocatorDefault, 0)
 
+/*
+ 65281
+ 65280
+ */
+
+var deviceSender: IOHIDDevice?
+// Matching filter: kIOHIDPrimaryUsagePageKey = 65280
+let matchingSenderDictionary: CFDictionary = NSDictionary(dictionary: [kIOHIDVendorIDKey:0x054C,kIOHIDProductIDKey:0x09AF,kIOHIDPrimaryUsagePageKey:0xFF00]) as CFDictionary
+// Create manager
+let managerIOHIDSender: IOHIDManager = IOHIDManagerCreate(kCFAllocatorDefault, 0)
+// Set matching filter
+IOHIDManagerSetDeviceMatching(managerIOHIDSender, matchingSenderDictionary)
+// Set device connect/disconnect callbacks
+IOHIDManagerRegisterDeviceMatchingCallback(managerIOHIDSender, { (inContext: UnsafeMutableRawPointer?, inIOReturn: IOReturn, inSender: UnsafeMutableRawPointer?, inIOHIDDevice: IOHIDDevice) in
+    // Connect the device
+    deviceSender = inIOHIDDevice
+    // Send activation report
+    IOHIDDeviceSetReport(inIOHIDDevice, kIOHIDReportTypeOutput, 0x21, dataMessage, 64)
+    // Present message
+    FileHandle.standardError.write("\nPSVR USB IS CONNECTED\n".data(using: String.Encoding.ascii)!)
+}, nil)
+
+IOHIDManagerRegisterDeviceRemovalCallback(managerIOHIDSender, { (inContext: UnsafeMutableRawPointer?, inIOReturn: IOReturn, inSender: UnsafeMutableRawPointer?, inIOHIDDevice: IOHIDDevice) in
+    // Nillify device
+    deviceSender = nil
+    // Present message
+    FileHandle.standardError.write("\nWARNING: PSVR USB IS DISCONNECTED\nWAITING FOR PSVR USB CONNECTION...\n".data(using: String.Encoding.ascii)!)
+}, nil)
+
+// Enable Sender Manager
+IOHIDManagerOpen(managerIOHIDSender, 0)
+
+// Detect device, after manager is open
+if let devicesSet: CFSet = IOHIDManagerCopyDevices(managerIOHIDSender) {
+    if (devicesSet as NSSet).count == 0 {
+        FileHandle.standardError.write("\nWAITING FOR PSVR USB CONNECTION...\n".data(using: String.Encoding.ascii)!)
+    }
+} else {
+    FileHandle.standardError.write("\nWAITING FOR PSVR USB CONNECTION...\n".data(using: String.Encoding.ascii)!)
+}
+// Put in a run loop to start detecting devices in real time
+IOHIDManagerScheduleWithRunLoop(managerIOHIDSender, CFRunLoopGetMain(), CFRunLoopMode.defaultMode.rawValue)
+
+
+
+// RECEIVING
+// Matching filter: kIOHIDPrimaryUsagePageKey = 65281
+let matchingRecieverDictionary: CFDictionary = NSDictionary(dictionary: [kIOHIDVendorIDKey:0x054C,kIOHIDProductIDKey:0x09AF,kIOHIDPrimaryUsagePageKey:0xFF01]) as CFDictionary
+// Create manager
+let managerIOHIDReciever: IOHIDManager = IOHIDManagerCreate(kCFAllocatorDefault, 0)
+// Register filter
+IOHIDManagerSetDeviceMatching(managerIOHIDReciever, matchingRecieverDictionary)
+
+// Common memory pointers to convert 2xUInt8 to Int16
+var numberPointerInt16 = UnsafeMutablePointer<Int16>.allocate(capacity: 1)
+var numberPointerUInt8: UnsafeMutablePointer<UInt8> = UnsafeMutableRawPointer(numberPointerInt16).assumingMemoryBound(to: UInt8.self)
+
+// Mouse shift dynamic values, summarized Gyro reports
 var horizontal: Int = 0
 var vartical: Int = 0
 
-let display = CGMainDisplayID()
+// Screen size
+let displayBounds: CGRect = CGDisplayBounds(CGMainDisplayID())
 
-let displayBounds: CGRect = CGDisplayBounds(display)
-let displayCenter = CGPoint(x: displayBounds.width/2, y: displayBounds.height/2)
-
+// Button status helpers
 var buttonVolUp: Bool = false
 var buttonVolDown: Bool = false
 var buttonMute: Bool = false
 
-var nextMouseClickDate: Date = Date().addingTimeInterval(1.5)
-var nextMouseDragDate: Date = Date().addingTimeInterval(0.1)
+// Reduces mouse move calls
+var mouseDragSplitter: Bool = true
 
 func cursorPoint(_ horizontal: Int, _ vartical: Int, _ displayBounds: CGRect) -> CGPoint {
-    var h = (-CGFloat(horizontal)/700.0) + (displayBounds.width / 2)
-    var v = (-CGFloat(vartical)/700.0) + (displayBounds.height / 2)
+    var h = (-CGFloat(horizontal)/600.0) + (displayBounds.width / 2)
+    var v = (-CGFloat(vartical)/600.0) + (displayBounds.height / 2)
     h = h < 0 ? 0 : (h > displayBounds.width ? displayBounds.width : h)
     v = v < 0 ? 0 : (v > displayBounds.height ? displayBounds.height : v)
     return CGPoint(x: h, y: v)
 }
 
-// Add block
-IOHIDManagerRegisterInputValueCallback(managerIOHID, { (context: UnsafeMutableRawPointer?, result: IOReturn, sender: UnsafeMutableRawPointer?, value: IOHIDValue) in
+// Add report block
+IOHIDManagerRegisterInputValueCallback(managerIOHIDReciever, { (context: UnsafeMutableRawPointer?, result: IOReturn, sender: UnsafeMutableRawPointer?, value: IOHIDValue) in
     let length = IOHIDValueGetLength(value)
     if length == 64 {
     let pointer: UnsafePointer<UInt8> = IOHIDValueGetBytePtr(value)
         
-        let buttonActive: UInt8 = pointer[0]
-        let buttonVolUpNow: Bool = buttonActive&2 == 0 ? false : true
-        let buttonVolDownNow: Bool = buttonActive&4 == 0 ? false : true
-        let buttonMuteNow: Bool = buttonActive&8 == 0 ? false : true
+        let buttonByte: UInt8 = pointer[0]
+        let buttonVolUpNow: Bool = buttonByte&2 == 0 ? false : true
+        let buttonVolDownNow: Bool = buttonByte&4 == 0 ? false : true
+        let buttonMuteNow: Bool = buttonByte&8 == 0 ? false : true
         
-        if buttonVolUpNow && (nextMouseClickDate < Date()) {
-            //print("CLICK")
-            nextMouseClickDate = Date().addingTimeInterval(1.5)
-            let cursorPointVal: CGPoint = cursorPoint(horizontal, vartical, displayBounds)
-            let eventMouseDown = CGEvent(mouseEventSource: nil, mouseType: CGEventType.leftMouseDown, mouseCursorPosition: cursorPointVal, mouseButton: CGMouseButton.left)
-            let eventMouseUp = CGEvent(mouseEventSource: nil, mouseType: CGEventType.leftMouseUp, mouseCursorPosition: cursorPointVal, mouseButton: CGMouseButton.left)
-            eventMouseDown?.post(tap: CGEventTapLocation.cgSessionEventTap)
-            eventMouseUp?.post(tap: CGEventTapLocation.cgSessionEventTap)
+        if buttonVolUpNow != buttonVolUp {
+            if buttonVolUp {
+                let eventMouseUp = CGEvent(mouseEventSource: nil, mouseType: CGEventType.leftMouseUp, mouseCursorPosition: cursorPoint(horizontal, vartical, displayBounds), mouseButton: CGMouseButton.left)
+                eventMouseUp?.post(tap: CGEventTapLocation.cgSessionEventTap)
+            } else {
+                let eventMouseDown = CGEvent(mouseEventSource: nil, mouseType: CGEventType.leftMouseDown, mouseCursorPosition: cursorPoint(horizontal, vartical, displayBounds), mouseButton: CGMouseButton.left)
+                eventMouseDown?.post(tap: CGEventTapLocation.cgSessionEventTap)
+            }
+            buttonVolUp = buttonVolUpNow
         } else if buttonVolDownNow {
-            // Continiously calculate cursor
-            shortOption[0] = pointer[36]
-            shortOption[1] = pointer[37]
-            horizontal = horizontal + Int(short[0])
-            shortOption[0] = pointer[38]
-            shortOption[1] = pointer[39]
-            vartical = vartical + Int(short[0])
+            // Continiously calculate cursor from Gyro Data while button pressed
+            numberPointerUInt8[0] = pointer[36]
+            numberPointerUInt8[1] = pointer[37]
+            horizontal = horizontal + Int(numberPointerInt16[0])
+            numberPointerUInt8[0] = pointer[38]
+            numberPointerUInt8[1] = pointer[39]
+            vartical = vartical + Int(numberPointerInt16[0])
             // Calculate and move cursor
-            if (nextMouseDragDate < Date()) {
-            //print("MOVE")
-            nextMouseDragDate = Date().addingTimeInterval(0.03)
-                
+            if mouseDragSplitter {
+                mouseDragSplitter = false
                 let cursorPointVal: CGPoint = cursorPoint(horizontal, vartical, displayBounds)
-
                 let eventMouseDisabled = CGEvent(mouseEventSource: nil, mouseType: CGEventType.tapDisabledByTimeout, mouseCursorPosition: cursorPointVal, mouseButton: CGMouseButton.left)
-                
                 let eventMouseMove = CGEvent(mouseEventSource: nil, mouseType: CGEventType.mouseMoved, mouseCursorPosition: cursorPointVal, mouseButton: CGMouseButton.left)
-                
                 eventMouseMove?.post(tap: CGEventTapLocation.cghidEventTap)
                 eventMouseDisabled?.post(tap: CGEventTapLocation.cghidEventTap)
                 //CGWarpMouseCursorPosition(cursorPointVal)
+            } else { mouseDragSplitter = true }
+        } else if buttonMuteNow != buttonMute {
+            if !buttonMute && (deviceSender != nil) {
+                // Reset
+                // Reset cursor
+                horizontal = 0
+                vartical = 0
+                //CGDisplayMoveCursorToPoint(display, cursorPoint(horizontal, vartical, displayBounds))
+                let cursorPointVal: CGPoint = cursorPoint(horizontal, vartical, displayBounds)
+                let eventMouseDisabled = CGEvent(mouseEventSource: nil, mouseType: CGEventType.tapDisabledByTimeout, mouseCursorPosition: cursorPointVal, mouseButton: CGMouseButton.left)
+                let eventMouseMove = CGEvent(mouseEventSource: nil, mouseType: CGEventType.mouseMoved, mouseCursorPosition: cursorPointVal, mouseButton: CGMouseButton.left)
+                eventMouseMove?.post(tap: CGEventTapLocation.cghidEventTap)
+                eventMouseDisabled?.post(tap: CGEventTapLocation.cghidEventTap)
+                // Switch
+                if buffer[0] == 80 { dataMessage[5] = 30 } else { dataMessage[5] = 80 }
+                // Send packet
+                IOHIDDeviceSetReport(deviceSender!, kIOHIDReportTypeOutput, 0x21, dataMessage, 64)
+                // Switch
+                dataMessage[5] = buffer[0]
+                // Send packet
+                IOHIDDeviceSetReport(deviceSender!, kIOHIDReportTypeOutput, 0x21, dataMessage, 64)
             }
-        }
-        
-        if !buttonMute && buttonMuteNow {
-            //print("RECENTER")
-            buttonMute = true
-            // Reset
-            // Reset cursor
-            
-            horizontal = 0
-            vartical = 0
-            CGDisplayMoveCursorToPoint(display, cursorPoint(horizontal, vartical, displayBounds))
-            let cursorPointVal: CGPoint = cursorPoint(horizontal, vartical, displayBounds)
-            let eventMouseDisabled = CGEvent(mouseEventSource: nil, mouseType: CGEventType.tapDisabledByTimeout, mouseCursorPosition: cursorPointVal, mouseButton: CGMouseButton.left)
-            let eventMouseMove = CGEvent(mouseEventSource: nil, mouseType: CGEventType.mouseMoved, mouseCursorPosition: cursorPointVal, mouseButton: CGMouseButton.left)
-            eventMouseMove?.post(tap: CGEventTapLocation.cghidEventTap)
-            eventMouseDisabled?.post(tap: CGEventTapLocation.cghidEventTap)
-            // Switch
-            if buffer[0] == 80 { dataMessage[5] = 30 } else { dataMessage[5] = 80 }
-            // Send packet
-            IOHIDDeviceSetReport(device!, kIOHIDReportTypeOutput, 0x21, dataMessage, 64)
-            // Switch
-            dataMessage[5] = buffer[0]
-            // Send packet
-            IOHIDDeviceSetReport(device!, kIOHIDReportTypeOutput, 0x21, dataMessage, 64)
-        } else if buttonMute && !buttonMuteNow {
-            buttonMute = false
+            buttonMute = buttonMuteNow
         }
         
         
         }
 }, nil)
 
+// Enable Reciever Manager
+IOHIDManagerOpen(managerIOHIDReciever, 0)
 // Enter to run Loop
-IOHIDManagerScheduleWithRunLoop(managerIOHID, CFRunLoopGetMain(), CFRunLoopMode.defaultMode.rawValue)
+IOHIDManagerScheduleWithRunLoop(managerIOHIDReciever, CFRunLoopGetMain(), CFRunLoopMode.defaultMode.rawValue)
 
-FileHandle.standardError.write("\nCopyright (C) 2018 Nikita Mordasov. All rights reserved.\n\npsvrCinemaUtil is running:\nCursor can be moved within screen by head movement.\nVR Control Buttons Remapped:\nMute: re-centers view and cursor\nVolume Down: Hold to Enable Cursor Movement\nVolume Up: Click at the Cursor (Single Click Only)\nTo update settings, find and delete psvrCinemaUtil.dat\nCtrl+C to exit (VR will continue to work).\n".data(using: String.Encoding.ascii)!)
+// Put program in run loop, to keep running
 RunLoop.current.run()
 
