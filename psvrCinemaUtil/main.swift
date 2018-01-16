@@ -98,7 +98,7 @@ var dataMessage: [UInt8] = [33, // REPORT ID 0x21 = 33
     16, // SIZE OF MEANINGFUL DATA BELOW IN BYTES
     192*buffer[2], // FIXED VIEW set 0x80 = 128 or VIRTUAL THEATER 0xC0 = 192)
     buffer[0], // Cinematic Screen Size (range from 26=small to 80=large)
-    50, // Cinematic Screen Distance (range from 20=near to 50=far)
+    35, // Cinematic Screen Distance (range from 20=near to 50=far)
     0, // IPD 0-41
     0,0,0,0,0,0, // unknown 6 bytes
     buffer[1], // Brightness (range from 0=dim to 32=bright)
@@ -119,14 +119,91 @@ var resetMarket: UInt8 = 0
 // Send Initial report
 IOHIDDeviceSetReport(device!, kIOHIDReportTypeOutput, 0x21, dataMessage, 64)
 
+// Short pointer
+var short = UnsafeMutablePointer<Int16>.allocate(capacity: 1)
+var shortOption: UnsafeMutablePointer<UInt8> = UnsafeMutableRawPointer(short).assumingMemoryBound(to: UInt8.self)
+
+var horizontal: Int = 0
+var vartical: Int = 0
+
+let display = CGMainDisplayID()
+
+let displayBounds: CGRect = CGDisplayBounds(display)
+let displayCenter = CGPoint(x: displayBounds.width/2, y: displayBounds.height/2)
+
+var buttonVolUp: Bool = false
+var buttonVolDown: Bool = false
+var buttonMute: Bool = false
+
+var nextMouseClickDate: Date = Date().addingTimeInterval(1.5)
+var nextMouseDragDate: Date = Date().addingTimeInterval(0.1)
+
+func cursorPoint(_ horizontal: Int, _ vartical: Int, _ displayBounds: CGRect) -> CGPoint {
+    var h = (-CGFloat(horizontal)/700.0) + (displayBounds.width / 2)
+    var v = (-CGFloat(vartical)/700.0) + (displayBounds.height / 2)
+    h = h < 0 ? 0 : (h > displayBounds.width ? displayBounds.width : h)
+    v = v < 0 ? 0 : (v > displayBounds.height ? displayBounds.height : v)
+    return CGPoint(x: h, y: v)
+}
+
 // Add block
 IOHIDManagerRegisterInputValueCallback(managerIOHID, { (context: UnsafeMutableRawPointer?, result: IOReturn, sender: UnsafeMutableRawPointer?, value: IOHIDValue) in
     let length = IOHIDValueGetLength(value)
     if length == 64 {
     let pointer: UnsafePointer<UInt8> = IOHIDValueGetBytePtr(value)
-        let trigger = pointer[2]
-        if (resetMarket != trigger) {
-            resetMarket = trigger
+        
+        let buttonActive: UInt8 = pointer[0]
+        let buttonVolUpNow: Bool = buttonActive&2 == 0 ? false : true
+        let buttonVolDownNow: Bool = buttonActive&4 == 0 ? false : true
+        let buttonMuteNow: Bool = buttonActive&8 == 0 ? false : true
+        
+        if buttonVolUpNow && (nextMouseClickDate < Date()) {
+            //print("CLICK")
+            nextMouseClickDate = Date().addingTimeInterval(1.5)
+            let cursorPointVal: CGPoint = cursorPoint(horizontal, vartical, displayBounds)
+            let eventMouseDown = CGEvent(mouseEventSource: nil, mouseType: CGEventType.leftMouseDown, mouseCursorPosition: cursorPointVal, mouseButton: CGMouseButton.left)
+            let eventMouseUp = CGEvent(mouseEventSource: nil, mouseType: CGEventType.leftMouseUp, mouseCursorPosition: cursorPointVal, mouseButton: CGMouseButton.left)
+            eventMouseDown?.post(tap: CGEventTapLocation.cgSessionEventTap)
+            eventMouseUp?.post(tap: CGEventTapLocation.cgSessionEventTap)
+        } else if buttonVolDownNow {
+            // Continiously calculate cursor
+            shortOption[0] = pointer[36]
+            shortOption[1] = pointer[37]
+            horizontal = horizontal + Int(short[0])
+            shortOption[0] = pointer[38]
+            shortOption[1] = pointer[39]
+            vartical = vartical + Int(short[0])
+            // Calculate and move cursor
+            if (nextMouseDragDate < Date()) {
+            //print("MOVE")
+            nextMouseDragDate = Date().addingTimeInterval(0.03)
+                
+                let cursorPointVal: CGPoint = cursorPoint(horizontal, vartical, displayBounds)
+
+                let eventMouseDisabled = CGEvent(mouseEventSource: nil, mouseType: CGEventType.tapDisabledByTimeout, mouseCursorPosition: cursorPointVal, mouseButton: CGMouseButton.left)
+                
+                let eventMouseMove = CGEvent(mouseEventSource: nil, mouseType: CGEventType.mouseMoved, mouseCursorPosition: cursorPointVal, mouseButton: CGMouseButton.left)
+                
+                eventMouseMove?.post(tap: CGEventTapLocation.cghidEventTap)
+                eventMouseDisabled?.post(tap: CGEventTapLocation.cghidEventTap)
+                //CGWarpMouseCursorPosition(cursorPointVal)
+            }
+        }
+        
+        if !buttonMute && buttonMuteNow {
+            //print("RECENTER")
+            buttonMute = true
+            // Reset
+            // Reset cursor
+            
+            horizontal = 0
+            vartical = 0
+            CGDisplayMoveCursorToPoint(display, cursorPoint(horizontal, vartical, displayBounds))
+            let cursorPointVal: CGPoint = cursorPoint(horizontal, vartical, displayBounds)
+            let eventMouseDisabled = CGEvent(mouseEventSource: nil, mouseType: CGEventType.tapDisabledByTimeout, mouseCursorPosition: cursorPointVal, mouseButton: CGMouseButton.left)
+            let eventMouseMove = CGEvent(mouseEventSource: nil, mouseType: CGEventType.mouseMoved, mouseCursorPosition: cursorPointVal, mouseButton: CGMouseButton.left)
+            eventMouseMove?.post(tap: CGEventTapLocation.cghidEventTap)
+            eventMouseDisabled?.post(tap: CGEventTapLocation.cghidEventTap)
             // Switch
             if buffer[0] == 80 { dataMessage[5] = 30 } else { dataMessage[5] = 80 }
             // Send packet
@@ -135,15 +212,17 @@ IOHIDManagerRegisterInputValueCallback(managerIOHID, { (context: UnsafeMutableRa
             dataMessage[5] = buffer[0]
             // Send packet
             IOHIDDeviceSetReport(device!, kIOHIDReportTypeOutput, 0x21, dataMessage, 64)
+        } else if buttonMute && !buttonMuteNow {
+            buttonMute = false
         }
-        //print(trigger)
-    //print("MESSAGE\(pointer[0]) \(pointer[1]) \(pointer[2]) \(pointer[3]) \(pointer[4]) \(pointer[5]) \(pointer[6]) \(pointer[7]) \(pointer[8])")
+        
+        
         }
 }, nil)
 
 // Enter to run Loop
 IOHIDManagerScheduleWithRunLoop(managerIOHID, CFRunLoopGetMain(), CFRunLoopMode.defaultMode.rawValue)
 
-FileHandle.standardError.write("\npsvrCinemaUtil is running:\nChanging VR volume, re-centers view,\nCtrl+C to close and disable volume re-center (VR will continue to work).".data(using: String.Encoding.ascii)!)
+FileHandle.standardError.write("\nCopyright (C) 2018 Nikita Mordasov. All rights reserved.\n\npsvrCinemaUtil is running:\nCursor can be moved within screen by head movement.\nVR Control Buttons Remapped:\nMute: re-centers view and cursor\nVolume Down: Hold to Enable Cursor Movement\nVolume Up: Click at the Cursor (Single Click Only)\nTo update settings, find and delete psvrCinemaUtil.dat\nCtrl+C to exit (VR will continue to work).\n".data(using: String.Encoding.ascii)!)
 RunLoop.current.run()
 
